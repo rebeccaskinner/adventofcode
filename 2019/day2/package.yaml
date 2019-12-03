@@ -26,6 +26,8 @@ dependencies:
 
 library:
   source-dirs: src
+  ghc-options:
+    - -O3
 
 executables:
   day2-exe:
@@ -35,6 +37,7 @@ executables:
     - -threaded
     - -rtsopts
     - -with-rtsopts=-N
+    - -O3
     dependencies:
     - day2
 

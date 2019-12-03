@@ -1,14 +1,16 @@
-{-# LANGUAGE GADTs #-}
+{-# LANGUAGE GADTs     #-}
+{-# LANGUAGE MagicHash #-}
 module Lib
     ( someFunc
     ) where
 
-import qualified Data.Vector as Vec
+import qualified Control.Exception   as Exception
+import qualified Data.IORef          as IO
+import qualified Data.Map.Strict     as Map
+import qualified Data.Vector         as Vec
 import qualified Data.Vector.Mutable as MVec
-import qualified Control.Exception as Exception
-import qualified Data.Map.Strict as Map
-import qualified Data.IORef as IO
-import qualified System.IO.Unsafe as Unsafe
+import           GHC.Exts
+import qualified System.IO.Unsafe    as Unsafe
 
 growPut :: a -> Int -> MVec.IOVector a -> IO (MVec.IOVector a)
 growPut newVal newIdx vec = do
@@ -59,8 +61,9 @@ run l noun verb =
     run' n state = do
       opSt <- step state n
       case opSt of
-        Term n -> pure n
+        Term n      -> pure n
         Cont state' -> run' (n + 4) state'
+
 
 prep :: Int -> Int -> MVec.IOVector Int -> IO (MVec.IOVector Int)
 prep noun verb oldState =
@@ -88,8 +91,25 @@ findInputs n expected
 findSolution =
   ((\(a,b) -> 100 * a + b) <$>) <$> findInputs 0 19690720
 
+findSolution' = do
+  let n1' = 12
+      v1  = 2
+      n2' = 13
+      v2  = 2
+
+  s1 <- run input n1' v1
+  s2 <- run input n2' v2
+
+  let c1 = n2' * s1 - n1' * s2 - v1
+      c2 = s2 - s1
+      v = 19690720 - c1
+      v' = v `div` c2
+      n' = v `div` c2
+
+  pure $ 100 * v' + n'
+
 input :: [Int]
 input = [1,0,0,3,1,1,2,3,1,3,4,3,1,5,0,3,2,6,1,19,1,5,19,23,2,9,23,27,1,6,27,31,1,31,9,35,2,35,10,39,1,5,39,43,2,43,9,47,1,5,47,51,1,51,5,55,1,55,9,59,2,59,13,63,1,63,9,67,1,9,67,71,2,71,10,75,1,75,6,79,2,10,79,83,1,5,83,87,2,87,10,91,1,91,5,95,1,6,95,99,2,99,13,103,1,103,6,107,1,107,5,111,2,6,111,115,1,115,13,119,1,119,2,123,1,5,123,0,99,2,0,14,0]
 
 someFunc :: IO ()
-someFunc = findSolution >>= putStrLn . show
+someFunc = findSolution' >>= putStrLn . show
