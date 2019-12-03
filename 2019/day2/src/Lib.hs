@@ -46,25 +46,6 @@ step oldstate at = do
     2  -> Cont <$> op (*)
     i  -> Exception.throw . userError $ "Invalid instruction: " <> show i
 
-memoDict =
-  Unsafe.unsafePerformIO $ IO.newIORef Map.empty
-
-toList :: MVec.IOVector Int -> IO [Int]
-toList = (Vec.toList <$>) . Vec.freeze
-
-memoStep :: MVec.IOVector Int -> Int -> IO OpState
-memoStep st n = do
-  d <- IO.readIORef memoDict
-  l <- toList st
-  let k = (n, l)
-  case Map.lookup k d of
-    Just st -> pure st
-    Nothing -> do
-      st' <- step st n
-      let d' = Map.insert k st' d
-      IO.writeIORef memoDict d'
-      pure st'
-
 toVec :: [Int] -> IO (MVec.IOVector Int)
 toVec = Vec.thaw . Vec.fromList
 
@@ -76,7 +57,7 @@ run l noun verb =
   where
     run' :: Int -> MVec.IOVector Int -> IO Int
     run' n state = do
-      opSt <- memoStep state n
+      opSt <- step state n
       case opSt of
         Term n -> pure n
         Cont state' -> run' (n + 4) state'
