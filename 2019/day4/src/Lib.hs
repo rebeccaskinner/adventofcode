@@ -6,7 +6,6 @@ import qualified Control.Monad       as Monad
 import qualified Control.Monad.ST    as ST
 import qualified Data.Vector         as Vec
 import qualified Data.Vector.Mutable as MVec
-import qualified Debug.Trace         as Debug
 
 checkNumber :: [Int] -> Bool
 checkNumber (n:ns) =
