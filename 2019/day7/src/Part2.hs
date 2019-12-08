@@ -15,24 +15,15 @@ import qualified Data.Maybe          as Maybe
 import qualified Data.Vector         as Vec
 import qualified Data.Vector.Mutable as MVec
 import qualified System.IO.Unsafe    as Unsafe
+import qualified Data.IntMap.Strict as IntMap
 
 data OpState = OpState
-  { vmState           :: MVec.IOVector Int
+  { vmState           :: IntMap.IntMap Int
   , vmOutputs         :: Maybe Int
-  , vmOutputInterrupt :: Int -> IO ()
   , vmFramePtr        :: Maybe Int
   , vmInput           :: Maybe Int
   , vmBlocked         :: Bool
-  }
-
-showOpState :: OpState -> IO String
-showOpState (OpState{..}) = do
-  let out = show vmOutputs
-  st  <- show <$> Vec.freeze vmState
-  let framePointer = case vmFramePtr of
-                       Nothing -> "<TERM>"
-                       Just n  -> "n"
-  pure . unlines $ [ "framePointer: " <> framePointer , "vmState:" , st , "outputs:" , out]
+  } deriving (Eq, Show)
 
 data AccessMode = Position
                 | Immediate deriving (Eq, Show)
@@ -42,10 +33,6 @@ parseAccessMode c =
   case c of
     '0' -> Position
     '1' -> Immediate
-
-atAddr :: AccessMode -> MVec.IOVector Int -> Int -> (MVec.IOVector Int -> Int -> IO a) -> IO a
-atAddr Immediate vec idx f = f vec idx
-atAddr Position vec idx f  = MVec.read vec idx >>= f vec
 
 data Op = Add
         | Mult
@@ -64,23 +51,8 @@ data Instruction = Instruction
   , _instrOperandModes :: [AccessMode]
   } deriving (Eq, Show)
 
-
-instrCache :: IO.IORef (Map.Map Int Instruction)
-instrCache = Unsafe.unsafePerformIO $ IO.newIORef Map.empty
-
-parseInstruction :: Int -> IO Instruction
-parseInstruction n = do
-  cache <- IO.readIORef instrCache
-  case Map.lookup n cache of
-    Nothing -> do
-      let instr = parseInstruction' n
-          cache' = Map.insert n instr cache
-      IO.writeIORef instrCache cache'
-      pure instr
-    Just i -> pure i
-
-parseInstruction' :: Int -> Instruction
-parseInstruction' !instr =
+parseInstruction :: Int -> Instruction
+parseInstruction !instr =
   let [a,b,c,d,e] = take 5 $ (reverse $ show instr) <> repeat '0'
       operModes = map parseAccessMode [c,d,e]
       mkInstr op arity = Instruction { _instrOp = op, _instrArity = arity, _instrOperandModes = operModes }
@@ -96,151 +68,148 @@ parseInstruction' !instr =
        "08" -> mkInstr StoreEq 3
        e    -> error $ "unexpected instruction: " <> e
 
-readLoc :: MVec.IOVector Int -> AccessMode -> Int -> IO Int
+readLoc :: IntMap.IntMap Int -> AccessMode -> Int -> Int
 readLoc vec mode idx = do
   case mode of
-    Immediate -> MVec.unsafeRead vec idx
-    Position  -> MVec.unsafeRead vec idx >>= MVec.unsafeRead vec
+    Immediate -> vec IntMap.! idx
+    Position  -> vec IntMap.! (vec IntMap.! idx)
 
-writeLoc :: MVec.IOVector Int -> AccessMode -> Int -> Int ->  IO (MVec.IOVector Int)
+writeLoc :: IntMap.IntMap Int -> AccessMode -> Int -> Int ->  IntMap.IntMap Int
 writeLoc vec mode idx val =
   case mode of
-    Immediate -> MVec.unsafeWrite vec idx val >> pure vec
-    Position  -> do
-      idx' <- MVec.unsafeRead vec idx
-      writeLoc vec Immediate idx' val
+    Immediate -> IntMap.insert idx val vec
+    Position  -> IntMap.insert (vec IntMap.! idx) val vec
 
-step :: OpState -> IO OpState
-step opState@(OpState _ _ _ Nothing _ _) = pure opState
-step (opState@OpState{..}) = do
+step :: OpState -> OpState
+step opState@(OpState _ _ Nothing _ _) = opState
+step opState = do
   let
-    (Just framePtr) = vmFramePtr
+    (Just framePtr) = vmFramePtr opState
     binOp :: (Int -> Int -> Int)
+          -> IntMap.IntMap Int
           -> (AccessMode, AccessMode, AccessMode)
-          -> IO (MVec.IOVector Int)
+          -> IntMap.IntMap Int
+    binOp f v (mode1, mode2, mode3) =
+        let in1 = readLoc v mode1 (framePtr + 1)
+            in2 = readLoc v mode2 (framePtr + 2)
+        in writeLoc v mode3 (framePtr + 3) (f in1 in2)
 
-    binOp f (mode1, mode2, mode3) = do
-        in1 <- readLoc vmState mode1 (framePtr + 1)
-        in2 <- readLoc vmState mode2 (framePtr + 2)
-        writeLoc vmState mode3 (framePtr + 3) (f in1 in2)
-
-    handleInstruction :: Instruction -> IO OpState
-    handleInstruction instruction@Instruction{..} = do
+    handleInstruction :: Instruction -> OpState
+    handleInstruction instruction@Instruction{..} =
       case _instrOp of
-        Exit  -> pure $ opState{vmFramePtr = Nothing}
-        Add   -> do
-          binOp (+) (_instrOperandModes !! 0, _instrOperandModes !! 1, _instrOperandModes !! 2)
-          pure $ opState{vmFramePtr = Just (framePtr + 4)}
-        Mult  -> do
-          binOp (*) (_instrOperandModes !! 0, _instrOperandModes !! 1, _instrOperandModes !! 2)
-          pure $ opState{vmFramePtr = Just (framePtr + 4)}
-        Input -> do
-          case vmInput of
-            Nothing -> do
-              pure opState{vmBlocked = True}
-            Just input -> do
-              writeLoc vmState (_instrOperandModes !! 0) (framePtr + 1) input
-              pure $ opState{vmFramePtr = Just (framePtr + 2), vmInput = Nothing, vmBlocked = False}
-        Output -> do
-          outVal <- readLoc vmState (_instrOperandModes !! 0) (framePtr + 1)
-          pure $ opState{vmFramePtr = Just (framePtr + 2), vmOutputs = Just outVal}
-        JumpTrue -> do
-          test      <- readLoc vmState (_instrOperandModes !! 0) (framePtr + 1)
-          framePtr' <- if test == 0
-                       then pure $ framePtr + 3
-                       else readLoc vmState (_instrOperandModes !! 1) (framePtr + 2)
-          pure $ opState{vmFramePtr = Just framePtr'}
-        JumpFalse -> do
-          test      <- readLoc vmState (_instrOperandModes !! 0) (framePtr + 1)
-          framePtr' <- if test /= 0
-                       then pure $ framePtr + 3
-                       else readLoc vmState (_instrOperandModes !! 1) (framePtr + 2)
-          pure $ opState{vmFramePtr = Just framePtr'}
-        StoreLT -> do
-          a <- readLoc vmState (_instrOperandModes !! 0) (framePtr + 1)
-          b <- readLoc vmState (_instrOperandModes !! 1) (framePtr + 2)
-          let outputVal = if a < b then 1 else 0
-          writeLoc vmState (_instrOperandModes !! 2) (framePtr + 3) outputVal
-          pure opState{vmFramePtr = Just (framePtr + 4)}
-        StoreEq -> do
-          a <- readLoc vmState (_instrOperandModes !! 0) (framePtr + 1)
-          b <- readLoc vmState (_instrOperandModes !! 1) (framePtr + 2)
-          let outputVal = if a == b then 1 else 0
-          writeLoc vmState (_instrOperandModes !! 2) (framePtr + 3) outputVal
-          pure opState{vmFramePtr = Just (framePtr + 4)}
+        Exit  -> opState{vmFramePtr = Nothing}
+        Add   ->
+          let
+            st = binOp (+) (vmState opState) (_instrOperandModes !! 0,_instrOperandModes !! 1,_instrOperandModes !! 2)
+          in opState{vmFramePtr = Just (framePtr + 4), vmState = st}
+        Mult  ->
+          let
+            st = binOp (*) (vmState opState) (_instrOperandModes !! 0,_instrOperandModes !! 1,_instrOperandModes !! 2)
+          in opState{vmFramePtr = Just (framePtr + 4), vmState = st}
+        Input ->
+          case vmInput opState of
+            Nothing ->
+              opState{vmBlocked = True}
+            Just input ->
+              let st = writeLoc (vmState opState) (_instrOperandModes !! 0) (framePtr + 1) input
+              in opState{vmFramePtr = Just (framePtr + 2), vmInput = Nothing, vmBlocked = False, vmState = st}
+        Output ->
+          let outputVal = readLoc (vmState opState) (_instrOperandModes !! 0) (framePtr + 1)
+          in opState{vmFramePtr = Just (framePtr + 2), vmOutputs = Just outputVal}
+        JumpTrue ->
+          let
+            test      = readLoc (vmState opState) (_instrOperandModes !! 0) (framePtr + 1)
+            framePtr' = if test == 0
+                        then framePtr + 3
+                        else readLoc (vmState opState) (_instrOperandModes !! 1) (framePtr + 2)
+          in opState{vmFramePtr = Just framePtr'}
+        JumpFalse ->
+          let
+            test      = readLoc (vmState opState) (_instrOperandModes !! 0) (framePtr + 1)
+            framePtr' = if test /= 0
+                        then framePtr + 3
+                        else readLoc (vmState opState) (_instrOperandModes !! 1) (framePtr + 2)
+          in opState{vmFramePtr = Just framePtr'}
+        StoreLT ->
+          let
+            a = readLoc (vmState opState) (_instrOperandModes !! 0) (framePtr + 1)
+            b = readLoc (vmState opState) (_instrOperandModes !! 1) (framePtr + 2)
+            outputVal = if a < b then 1 else 0
+            st = writeLoc (vmState opState) (_instrOperandModes !! 2) (framePtr + 3) outputVal
+          in opState{vmFramePtr = Just (framePtr + 4), vmState = st}
+        StoreEq ->
+          let
+            a = readLoc (vmState opState) (_instrOperandModes !! 0) (framePtr + 1)
+            b = readLoc (vmState opState) (_instrOperandModes !! 1) (framePtr + 2)
+            outputVal = if a == b then 1 else 0
+            st = writeLoc (vmState opState) (_instrOperandModes !! 2) (framePtr + 3) outputVal
+          in opState{vmFramePtr = Just (framePtr + 4), vmState = st}
 
-  opCode <- MVec.unsafeRead vmState framePtr
-  parsed <- parseInstruction opCode
-  handleInstruction parsed
+    opCode = (vmState opState) IntMap.! framePtr
+    parsed = parseInstruction opCode
+    in handleInstruction parsed
 
-toVec :: [Int] -> IO (MVec.IOVector Int)
-toVec = Vec.thaw . Vec.fromList
+toVec :: [Int] -> IntMap.IntMap Int
+toVec prog = IntMap.fromList $ zip [0..] prog
 
-runAmps' :: [Int] -> Int -> [Int] -> IO OpState
-runAmps' prog initialInput ampVals  = do
+runAmps :: [Int] -> Int -> [Int] -> OpState
+runAmps prog initialInput ampVals = do
   let
-    runUntilOutput :: OpState -> IO OpState
-    runUntilOutput st
-      | (Nothing == vmFramePtr st) = pure st
-      | otherwise = do
-          st' <- step st
-          if vmBlocked st'
-            then pure st'
-            else runUntilOutput st'
+    newState :: [Int] -> Int -> OpState
+    newState program initialInput =
+      runUntilBlocked $ OpState { vmState = toVec program
+                   , vmOutputs = Nothing
+                   , vmFramePtr = Just 0
+                   , vmInput = Just initialInput
+                   , vmBlocked = False
+                   }
 
-    run :: OpState -> OpState -> IO OpState
-    run oldSt st = do
-      runUntilOutput st{vmInput = vmOutputs oldSt}
+    runUntilBlocked :: OpState -> OpState
+    runUntilBlocked st =
+      let st' = step st
+      in if (vmBlocked st' || Nothing == (vmFramePtr st'))
+         then st'
+         else runUntilBlocked st'
 
-    loopBody :: Int -> [OpState] -> IO OpState
-    loopBody input (c:cs) = do
-      c' <- runUntilOutput c{vmInput = pure input}
-      Monad.foldM run c' cs
+    transferIO :: OpState -> OpState -> OpState
+    transferIO oldSt newSt =
+      let (Just o) = vmOutputs oldSt
+      in newSt { vmInput = Just o }
 
-    runLoop :: Int -> [OpState] -> IO OpState
-    runLoop seedInput vals = do
---      putStrLn $ "seedInput: " <> show seedInput
-      out@OpState{..} <- loopBody seedInput vals
-      case vmFramePtr of
-        Nothing -> pure out
-        Just _  -> do
-          let !lastOutput = Maybe.fromJust vmOutputs
-          runLoop lastOutput vals
+    ampStep :: [OpState] -> Int -> [OpState]
+    ampStep (a:rest) !n =
+      let
+        a' = runUntilBlocked $ a{vmInput = Just n}
+      in reverse $ List.foldl' go [a'] rest
+      where
+        go :: [OpState] -> OpState -> [OpState]
+        go st@(prev:_) !next =
+          (runUntilBlocked $ transferIO prev next) : st
 
-    emptyOpState :: [Int] -> Int -> IO OpState
-    emptyOpState prog seedVal = do
-      stVec          <- toVec prog
-      runUntilOutput $ OpState { vmState = stVec
-                     , vmOutputs = Nothing
-                     , vmOutputInterrupt = const (pure ())
-                     , vmFramePtr = Just 0
-                     , vmInput = pure seedVal
-                     , vmBlocked = False
-                     }
+    loop amps n =
+      let
+        stepState = ampStep amps n
+        nextInput = (Maybe.fromJust . vmOutputs . last $ stepState)
+      in
+        case (vmFramePtr . last $ stepState) of
+          Nothing -> stepState
+          _ -> loop stepState nextInput
 
-  states <- mapM (emptyOpState prog) ampVals
-  runLoop initialInput states
+    amplifiers = map (newState prog) ampVals
+    in last $ loop amplifiers 0
 
-t :: [Int]
-t = [3,26,1001,26,-4,26,3,27,1002,27,2,27,1,27,26, 27,4,27,1001,28,-1,28,1005,28,6,99,0,0,5]
-i :: [Int]
-i = [9,8,7,6,5]
+part2' :: [Int] -> [Int] -> Int
+part2' prog args =
+  let OpState{..} = runAmps prog 0 args
+  in (Maybe.fromJust vmOutputs)
 
-t' :: [Int]
-t' = [3,52,1001,52,-5,52,3,53,1,52,56,54,1007,54,5,55,1005,55,26,1001,54, -5,54,1105,1,12,1,53,54,53,1008,54,0,55,1001,55,1,55,2,53,55,53,4, 53,1001,56,-1,56,1005,56,6,99,0,0,0,0,10]
-i' :: [Int]
-i' = [9,7,8,5,6]
-
-part2' :: [Int] -> [Int] -> IO Int
-part2' prog args = do
-  OpState{..} <- runAmps' prog 0 args
-  pure (Maybe.fromJust vmOutputs)
+part2 :: [Int] -> Int
+part2 prog =
+  maximum . map (part2' prog) $ List.permutations [5..9]
 
 someFunc :: IO ()
-someFunc = part2' input' i' >>= print
-
-input' :: [Int]
-input' = [3,8,1001,8,10,8,105,1,0,0,21,42,63,76,101,114,195,276,357,438,99999,3,9,101,2,9,9,102,5,9,9,1001,9,3,9,1002,9,5,9,4,9,99,3,9,101,4,9,9,102,5,9,9,1001,9,5,9,102,2,9,9,4,9,99,3,9,1001,9,3,9,1002,9,5,9,4,9,99,3,9,1002,9,2,9,101,5,9,9,102,3,9,9,101,2,9,9,1002,9,3,9,4,9,99,3,9,101,3,9,9,102,2,9,9,4,9,99,3,9,1001,9,2,9,4,9,3,9,102,2,9,9,4,9,3,9,101,2,9,9,4,9,3,9,102,2,9,9,4,9,3,9,101,1,9,9,4,9,3,9,1001,9,2,9,4,9,3,9,1001,9,1,9,4,9,3,9,1001,9,2,9,4,9,3,9,1001,9,2,9,4,9,3,9,1001,9,1,9,4,9,99,3,9,102,2,9,9,4,9,3,9,1001,9,2,9,4,9,3,9,102,2,9,9,4,9,3,9,1002,9,2,9,4,9,3,9,1001,9,1,9,4,9,3,9,102,2,9,9,4,9,3,9,1002,9,2,9,4,9,3,9,102,2,9,9,4,9,3,9,1002,9,2,9,4,9,3,9,102,2,9,9,4,9,99,3,9,102,2,9,9,4,9,3,9,102,2,9,9,4,9,3,9,1002,9,2,9,4,9,3,9,1001,9,2,9,4,9,3,9,1002,9,2,9,4,9,3,9,1001,9,1,9,4,9,3,9,1002,9,2,9,4,9,3,9,1002,9,2,9,4,9,3,9,101,2,9,9,4,9,3,9,1001,9,2,9,4,9,99,3,9,1001,9,1,9,4,9,3,9,101,2,9,9,4,9,3,9,102,2,9,9,4,9,3,9,1001,9,2,9,4,9,3,9,1001,9,1,9,4,9,3,9,102,2,9,9,4,9,3,9,1001,9,2,9,4,9,3,9,1001,9,2,9,4,9,3,9,102,2,9,9,4,9,3,9,1001,9,2,9,4,9,99,3,9,102,2,9,9,4,9,3,9,101,1,9,9,4,9,3,9,1002,9,2,9,4,9,3,9,1002,9,2,9,4,9,3,9,1002,9,2,9,4,9,3,9,101,2,9,9,4,9,3,9,1001,9,2,9,4,9,3,9,101,2,9,9,4,9,3,9,1002,9,2,9,4,9,3,9,101,2,9,9,4,9,99]
+someFunc =
+  putStrLn . show $ part2 input
 
 input :: [Int]
 input = [3,8,1001,8,10,8,105,1,0,0,21,38,55,72,93,118,199,280,361,442,99999,3,9,1001,9,2,9,1002,9,5,9,101,4,9,9,4,9,99,3,9,1002,9,3,9,1001,9,5,9,1002,9,4,9,4,9,99,3,9,101,4,9,9,1002,9,3,9,1001,9,4,9,4,9,99,3,9,1002,9,4,9,1001,9,4,9,102,5,9,9,1001,9,4,9,4,9,99,3,9,101,3,9,9,1002,9,3,9,1001,9,3,9,102,5,9,9,101,4,9,9,4,9,99,3,9,101,1,9,9,4,9,3,9,1001,9,1,9,4,9,3,9,102,2,9,9,4,9,3,9,101,2,9,9,4,9,3,9,1001,9,1,9,4,9,3,9,102,2,9,9,4,9,3,9,1001,9,1,9,4,9,3,9,102,2,9,9,4,9,3,9,102,2,9,9,4,9,3,9,1002,9,2,9,4,9,99,3,9,1001,9,1,9,4,9,3,9,1002,9,2,9,4,9,3,9,1001,9,2,9,4,9,3,9,1002,9,2,9,4,9,3,9,101,2,9,9,4,9,3,9,102,2,9,9,4,9,3,9,102,2,9,9,4,9,3,9,102,2,9,9,4,9,3,9,101,1,9,9,4,9,3,9,101,1,9,9,4,9,99,3,9,101,2,9,9,4,9,3,9,101,1,9,9,4,9,3,9,101,1,9,9,4,9,3,9,102,2,9,9,4,9,3,9,1002,9,2,9,4,9,3,9,101,2,9,9,4,9,3,9,1002,9,2,9,4,9,3,9,1001,9,2,9,4,9,3,9,1002,9,2,9,4,9,3,9,101,1,9,9,4,9,99,3,9,1001,9,1,9,4,9,3,9,1002,9,2,9,4,9,3,9,1001,9,1,9,4,9,3,9,1001,9,2,9,4,9,3,9,102,2,9,9,4,9,3,9,1001,9,1,9,4,9,3,9,1002,9,2,9,4,9,3,9,1001,9,2,9,4,9,3,9,1001,9,2,9,4,9,3,9,102,2,9,9,4,9,99,3,9,101,1,9,9,4,9,3,9,1002,9,2,9,4,9,3,9,101,2,9,9,4,9,3,9,1002,9,2,9,4,9,3,9,101,2,9,9,4,9,3,9,1002,9,2,9,4,9,3,9,101,1,9,9,4,9,3,9,101,2,9,9,4,9,3,9,1002,9,2,9,4,9,3,9,101,1,9,9,4,9,99]
