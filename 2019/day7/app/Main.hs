@@ -1,6 +1,6 @@
 module Main where
 
-import Lib
+import Part2
 
 main :: IO ()
 main = someFunc

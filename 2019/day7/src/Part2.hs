@@ -6,9 +6,9 @@ module Part2
     ( someFunc
     ) where
 
+import qualified Data.IORef          as IO
 import qualified Control.Exception   as Exception
 import qualified Control.Monad       as Monad
-import qualified Data.IORef          as IO
 import qualified Data.List           as List
 import qualified Data.Map.Strict     as Map
 import qualified Data.Maybe          as Maybe
@@ -16,30 +16,9 @@ import qualified Data.Vector         as Vec
 import qualified Data.Vector.Mutable as MVec
 import qualified System.IO.Unsafe    as Unsafe
 
-growPut :: Int -> Int -> MVec.IOVector Int -> IO (MVec.IOVector Int)
-growPut newVal newIdx vec = do
-  let
-    oldLen = MVec.length vec
-    growBy = oldLen - (newIdx + 1)
-    newLen = max oldLen (newIdx + 1)
-  vec' <- if newLen > oldLen
-          then MVec.grow vec growBy
-          else pure vec
-  MVec.write vec' newIdx newVal
-  pure vec'
-
-listInput :: [Int] -> IO Int
-listInput l = do
-  let
-    r :: IO.IORef [Int]
-    r = Unsafe.unsafePerformIO $ IO.newIORef (cycle l)
-  l' <- IO.readIORef r
-  IO.modifyIORef r tail
-  pure $ head l'
-
 data OpState = OpState
   { vmState           :: MVec.IOVector Int
-  , vmOutputs         :: IO.IORef [OutputData]
+  , vmOutputs         :: Maybe Int
   , vmOutputInterrupt :: Int -> IO ()
   , vmFramePtr        :: Maybe Int
   , vmInput           :: Maybe Int
@@ -48,7 +27,7 @@ data OpState = OpState
 
 showOpState :: OpState -> IO String
 showOpState (OpState{..}) = do
-  out <- show <$> IO.readIORef vmOutputs
+  let out = show vmOutputs
   st  <- show <$> Vec.freeze vmState
   let framePointer = case vmFramePtr of
                        Nothing -> "<TERM>"
@@ -85,8 +64,23 @@ data Instruction = Instruction
   , _instrOperandModes :: [AccessMode]
   } deriving (Eq, Show)
 
-parseInstruction :: Int -> Instruction
-parseInstruction instr =
+
+instrCache :: IO.IORef (Map.Map Int Instruction)
+instrCache = Unsafe.unsafePerformIO $ IO.newIORef Map.empty
+
+parseInstruction :: Int -> IO Instruction
+parseInstruction n = do
+  cache <- IO.readIORef instrCache
+  case Map.lookup n cache of
+    Nothing -> do
+      let instr = parseInstruction' n
+          cache' = Map.insert n instr cache
+      IO.writeIORef instrCache cache'
+      pure instr
+    Just i -> pure i
+
+parseInstruction' :: Int -> Instruction
+parseInstruction' !instr =
   let [a,b,c,d,e] = take 5 $ (reverse $ show instr) <> repeat '0'
       operModes = map parseAccessMode [c,d,e]
       mkInstr op arity = Instruction { _instrOp = op, _instrArity = arity, _instrOperandModes = operModes }
@@ -105,28 +99,16 @@ parseInstruction instr =
 readLoc :: MVec.IOVector Int -> AccessMode -> Int -> IO Int
 readLoc vec mode idx = do
   case mode of
-    Immediate -> MVec.read vec idx
-    Position  -> MVec.read vec idx >>= MVec.read vec
+    Immediate -> MVec.unsafeRead vec idx
+    Position  -> MVec.unsafeRead vec idx >>= MVec.unsafeRead vec
 
 writeLoc :: MVec.IOVector Int -> AccessMode -> Int -> Int ->  IO (MVec.IOVector Int)
 writeLoc vec mode idx val =
   case mode of
-    Immediate -> growPut val idx vec
+    Immediate -> MVec.unsafeWrite vec idx val >> pure vec
     Position  -> do
-      idx' <- MVec.read vec idx
+      idx' <- MVec.unsafeRead vec idx
       writeLoc vec Immediate idx' val
-
-data OutputData = OutputData
-  { framePointer :: Int
-  , outputValue  :: Int
-  , programState :: Vec.Vector Int
-  } deriving (Eq, Show)
-
-outputs :: IO (IO.IORef [OutputData])
-outputs = IO.newIORef []
-
-outputSuccessful :: OutputData -> Bool
-outputSuccessful = (0 ==) . outputValue
 
 step :: OpState -> IO OpState
 step opState@(OpState _ _ _ Nothing _ _) = pure opState
@@ -161,13 +143,7 @@ step (opState@OpState{..}) = do
               pure $ opState{vmFramePtr = Just (framePtr + 2), vmInput = Nothing, vmBlocked = False}
         Output -> do
           outVal <- readLoc vmState (_instrOperandModes !! 0) (framePtr + 1)
-          vmOutputInterrupt outVal
-          st <- Vec.freeze vmState
-          let outputData = OutputData { framePointer = framePtr
-                                      , outputValue  = outVal
-                                      , programState =  st}
-          IO.modifyIORef' vmOutputs (outputData :)
-          pure $ opState{vmFramePtr = Just (framePtr + 2)}
+          pure $ opState{vmFramePtr = Just (framePtr + 2), vmOutputs = Just outVal}
         JumpTrue -> do
           test      <- readLoc vmState (_instrOperandModes !! 0) (framePtr + 1)
           framePtr' <- if test == 0
@@ -193,8 +169,8 @@ step (opState@OpState{..}) = do
           writeLoc vmState (_instrOperandModes !! 2) (framePtr + 3) outputVal
           pure opState{vmFramePtr = Just (framePtr + 4)}
 
-  opCode <- MVec.read vmState framePtr
-  let parsed = parseInstruction opCode
+  opCode <- MVec.unsafeRead vmState framePtr
+  parsed <- parseInstruction opCode
   handleInstruction parsed
 
 toVec :: [Int] -> IO (MVec.IOVector Int)
@@ -214,9 +190,7 @@ runAmps' prog initialInput ampVals  = do
 
     run :: OpState -> OpState -> IO OpState
     run oldSt st = do
-      !oVal <- Maybe.listToMaybe . map outputValue <$> IO.readIORef (vmOutputs oldSt)
-      newState <- runUntilOutput st{vmInput = oVal}
-      pure newState
+      runUntilOutput st{vmInput = vmOutputs oldSt}
 
     loopBody :: Int -> [OpState] -> IO OpState
     loopBody input (c:cs) = do
@@ -225,19 +199,19 @@ runAmps' prog initialInput ampVals  = do
 
     runLoop :: Int -> [OpState] -> IO OpState
     runLoop seedInput vals = do
+--      putStrLn $ "seedInput: " <> show seedInput
       out@OpState{..} <- loopBody seedInput vals
       case vmFramePtr of
         Nothing -> pure out
         Just _  -> do
-          !lastOutput <- head <$> IO.readIORef vmOutputs
-          runLoop (outputValue lastOutput) vals
+          let !lastOutput = Maybe.fromJust vmOutputs
+          runLoop lastOutput vals
 
     emptyOpState :: [Int] -> Int -> IO OpState
     emptyOpState prog seedVal = do
       stVec          <- toVec prog
-      outputRegister <- outputs
       runUntilOutput $ OpState { vmState = stVec
-                     , vmOutputs = outputRegister
+                     , vmOutputs = Nothing
                      , vmOutputInterrupt = const (pure ())
                      , vmFramePtr = Just 0
                      , vmInput = pure seedVal
@@ -260,12 +234,13 @@ i' = [9,7,8,5,6]
 part2' :: [Int] -> [Int] -> IO Int
 part2' prog args = do
   OpState{..} <- runAmps' prog 0 args
-  outVal <- IO.readIORef vmOutputs
-  pure (outputValue . head $  outVal)
+  pure (Maybe.fromJust vmOutputs)
 
 someFunc :: IO ()
-someFunc = pure ()
+someFunc = part2' input' i' >>= print
 
+input' :: [Int]
+input' = [3,8,1001,8,10,8,105,1,0,0,21,42,63,76,101,114,195,276,357,438,99999,3,9,101,2,9,9,102,5,9,9,1001,9,3,9,1002,9,5,9,4,9,99,3,9,101,4,9,9,102,5,9,9,1001,9,5,9,102,2,9,9,4,9,99,3,9,1001,9,3,9,1002,9,5,9,4,9,99,3,9,1002,9,2,9,101,5,9,9,102,3,9,9,101,2,9,9,1002,9,3,9,4,9,99,3,9,101,3,9,9,102,2,9,9,4,9,99,3,9,1001,9,2,9,4,9,3,9,102,2,9,9,4,9,3,9,101,2,9,9,4,9,3,9,102,2,9,9,4,9,3,9,101,1,9,9,4,9,3,9,1001,9,2,9,4,9,3,9,1001,9,1,9,4,9,3,9,1001,9,2,9,4,9,3,9,1001,9,2,9,4,9,3,9,1001,9,1,9,4,9,99,3,9,102,2,9,9,4,9,3,9,1001,9,2,9,4,9,3,9,102,2,9,9,4,9,3,9,1002,9,2,9,4,9,3,9,1001,9,1,9,4,9,3,9,102,2,9,9,4,9,3,9,1002,9,2,9,4,9,3,9,102,2,9,9,4,9,3,9,1002,9,2,9,4,9,3,9,102,2,9,9,4,9,99,3,9,102,2,9,9,4,9,3,9,102,2,9,9,4,9,3,9,1002,9,2,9,4,9,3,9,1001,9,2,9,4,9,3,9,1002,9,2,9,4,9,3,9,1001,9,1,9,4,9,3,9,1002,9,2,9,4,9,3,9,1002,9,2,9,4,9,3,9,101,2,9,9,4,9,3,9,1001,9,2,9,4,9,99,3,9,1001,9,1,9,4,9,3,9,101,2,9,9,4,9,3,9,102,2,9,9,4,9,3,9,1001,9,2,9,4,9,3,9,1001,9,1,9,4,9,3,9,102,2,9,9,4,9,3,9,1001,9,2,9,4,9,3,9,1001,9,2,9,4,9,3,9,102,2,9,9,4,9,3,9,1001,9,2,9,4,9,99,3,9,102,2,9,9,4,9,3,9,101,1,9,9,4,9,3,9,1002,9,2,9,4,9,3,9,1002,9,2,9,4,9,3,9,1002,9,2,9,4,9,3,9,101,2,9,9,4,9,3,9,1001,9,2,9,4,9,3,9,101,2,9,9,4,9,3,9,1002,9,2,9,4,9,3,9,101,2,9,9,4,9,99]
 
-input :: MVec.IOVector Int
-input = Unsafe.unsafePerformIO $ toVec [3,8,1001,8,10,8,105,1,0,0,21,38,55,72,93,118,199,280,361,442,99999,3,9,1001,9,2,9,1002,9,5,9,101,4,9,9,4,9,99,3,9,1002,9,3,9,1001,9,5,9,1002,9,4,9,4,9,99,3,9,101,4,9,9,1002,9,3,9,1001,9,4,9,4,9,99,3,9,1002,9,4,9,1001,9,4,9,102,5,9,9,1001,9,4,9,4,9,99,3,9,101,3,9,9,1002,9,3,9,1001,9,3,9,102,5,9,9,101,4,9,9,4,9,99,3,9,101,1,9,9,4,9,3,9,1001,9,1,9,4,9,3,9,102,2,9,9,4,9,3,9,101,2,9,9,4,9,3,9,1001,9,1,9,4,9,3,9,102,2,9,9,4,9,3,9,1001,9,1,9,4,9,3,9,102,2,9,9,4,9,3,9,102,2,9,9,4,9,3,9,1002,9,2,9,4,9,99,3,9,1001,9,1,9,4,9,3,9,1002,9,2,9,4,9,3,9,1001,9,2,9,4,9,3,9,1002,9,2,9,4,9,3,9,101,2,9,9,4,9,3,9,102,2,9,9,4,9,3,9,102,2,9,9,4,9,3,9,102,2,9,9,4,9,3,9,101,1,9,9,4,9,3,9,101,1,9,9,4,9,99,3,9,101,2,9,9,4,9,3,9,101,1,9,9,4,9,3,9,101,1,9,9,4,9,3,9,102,2,9,9,4,9,3,9,1002,9,2,9,4,9,3,9,101,2,9,9,4,9,3,9,1002,9,2,9,4,9,3,9,1001,9,2,9,4,9,3,9,1002,9,2,9,4,9,3,9,101,1,9,9,4,9,99,3,9,1001,9,1,9,4,9,3,9,1002,9,2,9,4,9,3,9,1001,9,1,9,4,9,3,9,1001,9,2,9,4,9,3,9,102,2,9,9,4,9,3,9,1001,9,1,9,4,9,3,9,1002,9,2,9,4,9,3,9,1001,9,2,9,4,9,3,9,1001,9,2,9,4,9,3,9,102,2,9,9,4,9,99,3,9,101,1,9,9,4,9,3,9,1002,9,2,9,4,9,3,9,101,2,9,9,4,9,3,9,1002,9,2,9,4,9,3,9,101,2,9,9,4,9,3,9,1002,9,2,9,4,9,3,9,101,1,9,9,4,9,3,9,101,2,9,9,4,9,3,9,1002,9,2,9,4,9,3,9,101,1,9,9,4,9,99]
+input :: [Int]
+input = [3,8,1001,8,10,8,105,1,0,0,21,38,55,72,93,118,199,280,361,442,99999,3,9,1001,9,2,9,1002,9,5,9,101,4,9,9,4,9,99,3,9,1002,9,3,9,1001,9,5,9,1002,9,4,9,4,9,99,3,9,101,4,9,9,1002,9,3,9,1001,9,4,9,4,9,99,3,9,1002,9,4,9,1001,9,4,9,102,5,9,9,1001,9,4,9,4,9,99,3,9,101,3,9,9,1002,9,3,9,1001,9,3,9,102,5,9,9,101,4,9,9,4,9,99,3,9,101,1,9,9,4,9,3,9,1001,9,1,9,4,9,3,9,102,2,9,9,4,9,3,9,101,2,9,9,4,9,3,9,1001,9,1,9,4,9,3,9,102,2,9,9,4,9,3,9,1001,9,1,9,4,9,3,9,102,2,9,9,4,9,3,9,102,2,9,9,4,9,3,9,1002,9,2,9,4,9,99,3,9,1001,9,1,9,4,9,3,9,1002,9,2,9,4,9,3,9,1001,9,2,9,4,9,3,9,1002,9,2,9,4,9,3,9,101,2,9,9,4,9,3,9,102,2,9,9,4,9,3,9,102,2,9,9,4,9,3,9,102,2,9,9,4,9,3,9,101,1,9,9,4,9,3,9,101,1,9,9,4,9,99,3,9,101,2,9,9,4,9,3,9,101,1,9,9,4,9,3,9,101,1,9,9,4,9,3,9,102,2,9,9,4,9,3,9,1002,9,2,9,4,9,3,9,101,2,9,9,4,9,3,9,1002,9,2,9,4,9,3,9,1001,9,2,9,4,9,3,9,1002,9,2,9,4,9,3,9,101,1,9,9,4,9,99,3,9,1001,9,1,9,4,9,3,9,1002,9,2,9,4,9,3,9,1001,9,1,9,4,9,3,9,1001,9,2,9,4,9,3,9,102,2,9,9,4,9,3,9,1001,9,1,9,4,9,3,9,1002,9,2,9,4,9,3,9,1001,9,2,9,4,9,3,9,1001,9,2,9,4,9,3,9,102,2,9,9,4,9,99,3,9,101,1,9,9,4,9,3,9,1002,9,2,9,4,9,3,9,101,2,9,9,4,9,3,9,1002,9,2,9,4,9,3,9,101,2,9,9,4,9,3,9,1002,9,2,9,4,9,3,9,101,1,9,9,4,9,3,9,101,2,9,9,4,9,3,9,1002,9,2,9,4,9,3,9,101,1,9,9,4,9,99]
