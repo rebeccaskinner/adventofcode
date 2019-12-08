@@ -1,5 +1,6 @@
+{-# LANGUAGE BangPatterns    #-}
 {-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TupleSections   #-}
 
 module Part2
     ( someFunc
@@ -8,11 +9,12 @@ module Part2
 import qualified Control.Exception   as Exception
 import qualified Control.Monad       as Monad
 import qualified Data.IORef          as IO
+import qualified Data.List           as List
 import qualified Data.Map.Strict     as Map
+import qualified Data.Maybe          as Maybe
 import qualified Data.Vector         as Vec
 import qualified Data.Vector.Mutable as MVec
 import qualified System.IO.Unsafe    as Unsafe
-import qualified Data.List as List
 
 growPut :: Int -> Int -> MVec.IOVector Int -> IO (MVec.IOVector Int)
 growPut newVal newIdx vec = do
@@ -98,7 +100,7 @@ parseInstruction instr =
        "06" -> mkInstr JumpFalse 2
        "07" -> mkInstr StoreLT 3
        "08" -> mkInstr StoreEq 3
-       e -> error $ "unexpected instruction: " <> e
+       e    -> error $ "unexpected instruction: " <> e
 
 readLoc :: MVec.IOVector Int -> AccessMode -> Int -> IO Int
 readLoc vec mode idx = do
@@ -152,10 +154,11 @@ step (opState@OpState{..}) = do
           pure $ opState{vmFramePtr = Just (framePtr + 4)}
         Input -> do
           case vmInput of
-            Nothing -> pure opState{vmBlocked = True}
+            Nothing -> do
+              pure opState{vmBlocked = True}
             Just input -> do
               writeLoc vmState (_instrOperandModes !! 0) (framePtr + 1) input
-              pure $ opState{vmFramePtr = Just (framePtr + 2), vmInput = Nothing}
+              pure $ opState{vmFramePtr = Just (framePtr + 2), vmInput = Nothing, vmBlocked = False}
         Output -> do
           outVal <- readLoc vmState (_instrOperandModes !! 0) (framePtr + 1)
           vmOutputInterrupt outVal
@@ -163,7 +166,7 @@ step (opState@OpState{..}) = do
           let outputData = OutputData { framePointer = framePtr
                                       , outputValue  = outVal
                                       , programState =  st}
-          IO.modifyIORef vmOutputs (outputData :)
+          IO.modifyIORef' vmOutputs (outputData :)
           pure $ opState{vmFramePtr = Just (framePtr + 2)}
         JumpTrue -> do
           test      <- readLoc vmState (_instrOperandModes !! 0) (framePtr + 1)
@@ -202,7 +205,7 @@ runAmps' prog initialInput ampVals  = do
   let
     runUntilOutput :: OpState -> IO OpState
     runUntilOutput st
-      | Nothing == vmFramePtr st = pure st
+      | (Nothing == vmFramePtr st) = pure st
       | otherwise = do
           st' <- step st
           if vmBlocked st'
@@ -210,9 +213,9 @@ runAmps' prog initialInput ampVals  = do
             else runUntilOutput st'
 
     run :: OpState -> OpState -> IO OpState
-    run (OpState{..}) st = do
-      oVal <- outputValue . head <$> IO.readIORef vmOutputs
-      newState <- runUntilOutput st{vmInput = pure oVal}
+    run oldSt st = do
+      !oVal <- Maybe.listToMaybe . map outputValue <$> IO.readIORef (vmOutputs oldSt)
+      newState <- runUntilOutput st{vmInput = oVal}
       pure newState
 
     loopBody :: Int -> [OpState] -> IO OpState
@@ -226,29 +229,33 @@ runAmps' prog initialInput ampVals  = do
       case vmFramePtr of
         Nothing -> pure out
         Just _  -> do
-          lastOutput <- last <$> IO.readIORef vmOutputs
+          !lastOutput <- head <$> IO.readIORef vmOutputs
           runLoop (outputValue lastOutput) vals
 
     emptyOpState :: [Int] -> Int -> IO OpState
     emptyOpState prog seedVal = do
       stVec          <- toVec prog
       outputRegister <- outputs
-      runUntilOutput OpState { vmState = stVec
-                             , vmOutputs = outputRegister
-                             , vmOutputInterrupt = const (pure ())
-                             , vmFramePtr = Just 0
-                             , vmInput = pure seedVal
-                             , vmBlocked = False
-                             }
+      runUntilOutput $ OpState { vmState = stVec
+                     , vmOutputs = outputRegister
+                     , vmOutputInterrupt = const (pure ())
+                     , vmFramePtr = Just 0
+                     , vmInput = pure seedVal
+                     , vmBlocked = False
+                     }
 
   states <- mapM (emptyOpState prog) ampVals
   runLoop initialInput states
 
 t :: [Int]
 t = [3,26,1001,26,-4,26,3,27,1002,27,2,27,1,27,26, 27,4,27,1001,28,-1,28,1005,28,6,99,0,0,5]
+i :: [Int]
+i = [9,8,7,6,5]
 
 t' :: [Int]
 t' = [3,52,1001,52,-5,52,3,53,1,52,56,54,1007,54,5,55,1005,55,26,1001,54, -5,54,1105,1,12,1,53,54,53,1008,54,0,55,1001,55,1,55,2,53,55,53,4, 53,1001,56,-1,56,1005,56,6,99,0,0,0,0,10]
+i' :: [Int]
+i' = [9,7,8,5,6]
 
 part2' :: [Int] -> [Int] -> IO Int
 part2' prog args = do
