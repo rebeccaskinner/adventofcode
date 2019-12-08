@@ -142,7 +142,6 @@ step (opState@OpState{..}) = do
 
     handleInstruction :: Instruction -> IO OpState
     handleInstruction instruction@Instruction{..} = do
-      putStrLn "calling handleInstruction"
       case _instrOp of
         Exit  -> pure $ opState{vmFramePtr = Nothing}
         Add   -> do
@@ -156,7 +155,7 @@ step (opState@OpState{..}) = do
             Nothing -> pure opState{vmBlocked = True}
             Just input -> do
               writeLoc vmState (_instrOperandModes !! 0) (framePtr + 1) input
-              pure $ opState{vmFramePtr = Just (framePtr + 2)}
+              pure $ opState{vmFramePtr = Just (framePtr + 2), vmInput = Nothing}
         Output -> do
           outVal <- readLoc vmState (_instrOperandModes !! 0) (framePtr + 1)
           vmOutputInterrupt outVal
@@ -205,10 +204,8 @@ runAmps' prog initialInput ampVals  = do
     runUntilOutput st
       | Nothing == vmFramePtr st = pure st
       | otherwise = do
-          r     <- IO.newIORef False
-          st'   <- step st{vmOutputInterrupt = \_ -> IO.writeIORef r True}
-          hadIO <- IO.readIORef r
-          if hadIO || (vmBlocked st')
+          st' <- step st
+          if vmBlocked st'
             then pure st'
             else runUntilOutput st'
 
@@ -229,7 +226,7 @@ runAmps' prog initialInput ampVals  = do
       case vmFramePtr of
         Nothing -> pure out
         Just _  -> do
-          lastOutput <- head <$> IO.readIORef vmOutputs
+          lastOutput <- last <$> IO.readIORef vmOutputs
           runLoop (outputValue lastOutput) vals
 
     emptyOpState :: [Int] -> Int -> IO OpState
@@ -238,7 +235,7 @@ runAmps' prog initialInput ampVals  = do
       outputRegister <- outputs
       runUntilOutput OpState { vmState = stVec
                              , vmOutputs = outputRegister
-                             , vmOutputInterrupt = \o -> putStrLn $ "Output: " <>  show o
+                             , vmOutputInterrupt = const (pure ())
                              , vmFramePtr = Just 0
                              , vmInput = pure seedVal
                              , vmBlocked = False
