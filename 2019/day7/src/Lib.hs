@@ -1,4 +1,5 @@
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE TupleSections #-}
 
 module Lib
     ( someFunc
@@ -35,10 +36,11 @@ listInput l = do
   pure $ head l'
 
 data OpState = OpState
-  { vmState     :: MVec.IOVector Int
-  , vmOutputs   :: IO.IORef [OutputData]
-  , vmFramePtr  :: Maybe Int
-  , vmInput     :: IO Int
+  { vmState           :: MVec.IOVector Int
+  , vmOutputs         :: IO.IORef [OutputData]
+  , vmOutputInterrupt :: Int -> IO ()
+  , vmFramePtr        :: Maybe Int
+  , vmInput           :: IO Int
   }
 
 showOpState :: OpState -> IO String
@@ -124,7 +126,7 @@ outputSuccessful :: OutputData -> Bool
 outputSuccessful = (0 ==) . outputValue
 
 step :: OpState -> IO OpState
-step opState@(OpState _ _ Nothing _ ) = pure opState
+step opState@(OpState _ _ _ Nothing _ ) = pure opState
 step (opState@OpState{..}) = do
   let
     (Just framePtr) = vmFramePtr
@@ -139,6 +141,7 @@ step (opState@OpState{..}) = do
 
     handleInstruction :: Instruction -> IO OpState
     handleInstruction instruction@Instruction{..} = do
+      putStrLn "calling handleInstruction"
       case _instrOp of
         Exit  -> pure $ opState{vmFramePtr = Nothing}
         Add   -> do
@@ -149,10 +152,12 @@ step (opState@OpState{..}) = do
           pure $ opState{vmFramePtr = Just (framePtr + 4)}
         Input -> do
           input <- vmInput
+          putStrLn ("input---: " <> show input)
           writeLoc vmState (_instrOperandModes !! 0) (framePtr + 1) input
           pure $ opState{vmFramePtr = Just (framePtr + 2)}
         Output -> do
           outVal <- readLoc vmState (_instrOperandModes !! 0) (framePtr + 1)
+          vmOutputInterrupt outVal
           st <- Vec.freeze vmState
           let outputData = OutputData { framePointer = framePtr
                                       , outputValue  = outVal
@@ -202,6 +207,7 @@ runAmps prog initialInput (amp:amps)  = do
                    , vmFramePtr = Just 0
                    , vmOutputs = o
                    , vmInput = listInput [amp, oVal]
+                   , vmOutputInterrupt = const (pure ())
                    }
 
   o <- outputs
@@ -209,42 +215,79 @@ runAmps prog initialInput (amp:amps)  = do
                     , vmOutputs  = o
                     , vmFramePtr = Just 0
                     , vmInput    = listInput [amp,initialInput]
+                    , vmOutputInterrupt = const (pure ())
                     }
 
   OpState{..} <- Monad.foldM run r amps
   outputValue . head <$> IO.readIORef vmOutputs
 
 
-runAmps' :: MVec.IOVector Int -> Int -> [Int] -> IO Int
-runAmps' prog initialInput (amp:amps)  = do
+runAmps' :: [Int] -> Int -> [Int] -> IO OpState
+runAmps' prog initialInput ampVals  = do
   let
-    run :: OpState -> Int -> IO OpState
-    run (OpState{..}) amp = do
+    runUntilOutput :: OpState -> IO OpState
+    runUntilOutput (st@OpState{..})
+      | Nothing == vmFramePtr = pure st
+      | otherwise = do
+          r     <- IO.newIORef False
+          st'   <- step st{vmOutputInterrupt = \_ -> IO.writeIORef r True}
+          hadIO <- IO.readIORef r
+          if hadIO
+            then pure st'
+            else runUntilOutput st'
+
+    run :: OpState -> OpState -> IO OpState
+    run (OpState{..}) st = do
       oVal <- outputValue . head <$> IO.readIORef vmOutputs
-      o <- outputs
-      eval' OpState { vmState = prog
-                    , vmFramePtr = Just 0
-                    , vmOutputs = o
-                    , vmInput = listInput [amp, oVal]
-                    }
+      newState <- runUntilOutput st{vmInput = pure oVal}
+      pure newState
 
-  o <- outputs
-  r <- eval' OpState { vmState    = prog
-                     , vmOutputs  = o
-                     , vmFramePtr = Just 0
-                     , vmInput    = listInput [amp,initialInput]
-                     }
+    loopBody :: Int -> [OpState] -> IO OpState
+    loopBody input (c:cs) = do
+      c' <- runUntilOutput c{vmInput = pure input}
+      Monad.foldM run c' cs
 
-  OpState{..} <- Monad.foldM run r amps
-  outputValue . head <$> IO.readIORef vmOutputs
+    runLoop :: Int -> [OpState] -> IO OpState
+    runLoop seedInput vals = do
+      out@OpState{..} <- loopBody seedInput vals
+      case vmFramePtr of
+        Nothing -> pure out
+        Just _  -> do
+          lastOutput <- head <$> IO.readIORef vmOutputs
+          runLoop (outputValue lastOutput) vals
 
+    emptyOpState :: [Int] -> Int -> IO OpState
+    emptyOpState prog seedVal = do
+      stVec          <- toVec prog
+      outputRegister <- outputs
+      runUntilOutput OpState { vmState = stVec
+                             , vmOutputs = outputRegister
+                             , vmOutputInterrupt = \o -> putStrLn $ "Output: " <>  show o
+                             , vmFramePtr = Just 0
+                             , vmInput = pure seedVal
+                             }
 
-t = Unsafe.unsafePerformIO $ toVec [3,26,1001,26,-4,26,3,27,1002,27,2,27,1,27,26, 27,4,27,1001,28,-1,28,1005,28,6,99,0,0,5]
+  states <- mapM (emptyOpState prog) ampVals
+  putStrLn $ "length of states: " <> show (length states)
+  runLoop initialInput states
+
+t :: [Int]
+t = [3,26,1001,26,-4,26,3,27,1002,27,2,27,1,27,26, 27,4,27,1001,28,-1,28,1005,28,6,99,0,0,5]
+
+t' :: [Int]
+t' = [3,52,1001,52,-5,52,3,53,1,52,56,54,1007,54,5,55,1005,55,26,1001,54, -5,54,1105,1,12,1,53,54,53,1008,54,0,55,1001,55,1,55,2,53,55,53,4, 53,1001,56,-1,56,1005,56,6,99,0,0,0,0,10]
 
 part1 :: IO Int
 part1 =
   let inputs = List.permutations [0..4]
   in maximum <$> mapM (runAmps input 0) inputs
+
+part2' :: [Int] -> [Int] -> IO Int
+part2' prog args = do
+  OpState{..} <- runAmps' prog 0 args
+  outVal <- IO.readIORef vmOutputs
+  mapM (putStrLn . show) outVal
+  pure (outputValue . head $  outVal)
 
 testProg :: [Int] -> IO Int -> IO [OutputData]
 testProg l input = do
@@ -253,7 +296,9 @@ testProg l input = do
   eval $ OpState { vmState = v
                  , vmOutputs = o
                  , vmFramePtr = Just 0
-                 , vmInput = input }
+                 , vmInput = input
+                 , vmOutputInterrupt = const (pure ())
+                 }
   l' <- Vec.freeze v
   putStrLn . show $ l'
   IO.readIORef o >>= putStrLn . show . reverse
