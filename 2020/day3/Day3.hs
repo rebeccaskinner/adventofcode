@@ -22,7 +22,7 @@ parsePart1Input :: String -> [[Square]]
 parsePart1Input = map parseRow . lines
 
 countTrees :: [[Square]] -> Int
-countTrees  = length . filter (==Tree) . map head . zipWith drop [0,3..]
+countTrees = countTrees' 3 1
 
 dropEvery :: Int -> [a] -> [a]
 dropEvery n [] = []
@@ -31,12 +31,8 @@ dropEvery n xs =
   in (head hd) : dropEvery n tl
 
 countTrees' :: Int -> Int -> [[Square]] -> Int
-countTrees' rightCnt downCnt squares =
-  let
-    withDownCount = dropEvery downCnt squares
-    withRightCount = zipWith drop [0,rightCnt..] withDownCount
-  in length . filter (==Tree) . map head $ withRightCount
---  length . filter (==Tree) . map head . dropEvery downCnt . zipWith drop [0,rightCnt..]
+countTrees' rightCnt downCnt =
+  length . filter (==Tree) . map head . zipWith drop [0,rightCnt..] . dropEvery downCnt
 
 part1 :: String -> IO ()
 part1 = putStrLn . show . countTrees . parsePart1Input
