@@ -1,15 +1,18 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Main where
+module AdventOfCode.Day2
+  ( part1
+  , part2
+  , day2
+  ) where
+
+import           AdventOfCode.Types
 import           Control.Monad
 import           Control.Monad.ST
 import           Data.Bits
-import           Data.Char
 import           GHC.Arr
-import           System.Environment (getArgs)
 import           Text.Read          (readMaybe)
 
 import qualified Data.Text.Lazy     as Text
-import qualified Data.Text.Lazy.IO  as Text
 
 parsePart1Row :: Text.Text -> Maybe (Int,Int,Char,Text.Text)
 parsePart1Row t = do
@@ -56,13 +59,6 @@ computeRowEligible txt =
     Just (minCnt, maxCnt, c, pw) ->
       validatePart1Row c (valueInRange (minCnt,maxCnt)) (Text.unpack pw)
 
-part1 :: FilePath -> IO ()
-part1 fname = do
-  t <- Text.lines <$> Text.readFile fname
-  let r = filter computeRowEligible t
-  putStrLn "Valid Passwords"
-  mapM_ print r
-  putStrLn $ "total: " <> show (length r)
 
 validatePart2Row :: (Int,Int) -> Char -> Text.Text -> Bool
 validatePart2Row (idx,idx') c t =
@@ -77,18 +73,21 @@ computeRowEligible' t =
     Just (idx,idx',c,pw) -> validatePart2Row (idx,idx') c pw
     _                    -> False
 
-part2 :: FilePath -> IO ()
-part2 fname = do
-  t <- Text.lines <$> Text.readFile fname
+part2 :: Puzzle IO ()
+part2 = withLazyTextInput $ \content -> do
+  let t = Text.lines content
   let r = filter computeRowEligible' t
   putStrLn "Valid Passwords"
   mapM_ print r
   putStrLn $ "total: " <> show (length r)
 
-main :: IO ()
-main = do
-  (part:fname:_) <- getArgs
-  case part of
-    "part1" -> part1 fname
-    "part2" -> part2 fname
-    badCmd  -> putStrLn $ "Unknown command: " <> badCmd
+part1 :: Puzzle IO ()
+part1 = withLazyTextInput $ \content -> do
+  let t = Text.lines content
+  let r = filter computeRowEligible t
+  putStrLn "Valid Passwords"
+  mapM_ print r
+  putStrLn $ "total: " <> show (length r)
+
+day2 :: PuzzleDay IO
+day2 = PuzzleDay part1 part2

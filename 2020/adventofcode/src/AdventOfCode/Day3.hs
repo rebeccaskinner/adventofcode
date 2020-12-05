@@ -1,6 +1,11 @@
-module Main where
+module AdventOfCode.Day3
+  ( part1
+  , part2
+  , day3
+  ) where
 import System.Environment (getArgs)
-import Data.List
+import AdventOfCode.Types
+
 
 data Square = Open | Tree deriving (Eq, Show)
 
@@ -10,10 +15,6 @@ parseSquare c =
     '.' -> Open
     '#' -> Tree
     _ -> error "unsupported square type"
-
-showSquare :: Square -> Char
-showSquare Open = '.'
-showSquare Tree = '#'
 
 parseRow :: String -> [Square]
 parseRow = cycle . map parseSquare
@@ -25,7 +26,7 @@ countTrees :: [[Square]] -> Int
 countTrees = countTrees' 3 1
 
 dropEvery :: Int -> [a] -> [a]
-dropEvery n [] = []
+dropEvery _n [] = []
 dropEvery n xs =
   let (hd,tl) = splitAt n xs
   in (head hd) : dropEvery n tl
@@ -34,11 +35,11 @@ countTrees' :: Int -> Int -> [[Square]] -> Int
 countTrees' rightCnt downCnt =
   length . filter (==Tree) . map head . zipWith drop [0,rightCnt..] . dropEvery downCnt
 
-part1 :: String -> IO ()
-part1 = putStrLn . show . countTrees . parsePart1Input
+part1 :: Puzzle IO ()
+part1 = withStringInput $ putStrLn . show . countTrees . parsePart1Input
 
-part2 :: String -> IO ()
-part2 input = do
+part2 :: Puzzle IO ()
+part2 = withStringInput $ \input -> do
   let parsed = parsePart1Input input
       a = countTrees' 1 1 parsed
       b = countTrees' 3 1 parsed
@@ -53,11 +54,5 @@ part2 input = do
   putStrLn $ "Right 1, Down 2: " <> show (e)
   putStrLn $ "product: " <> show (foldr (*) 1 [a,b,c,d,e])
 
-main :: IO ()
-main = do
-  [part, fname] <- getArgs
-  contents <- readFile fname
-  case part of
-    "part1" -> part1 contents
-    "part2" -> part2 contents
-    _ -> fail $ "unknown part: " <> part
+day3 :: PuzzleDay IO
+day3 = PuzzleDay part1 part2
