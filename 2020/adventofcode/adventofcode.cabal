@@ -24,6 +24,7 @@ library
                      , AdventOfCode.Day2
                      , AdventOfCode.Day3
                      , AdventOfCode.Day4
+                     , AdventOfCode.Day5
   -- other-modules:
   -- other-extensions:
   build-depends:       base ^>=4.14.1.0

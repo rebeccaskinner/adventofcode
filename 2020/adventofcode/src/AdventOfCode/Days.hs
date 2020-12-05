@@ -3,6 +3,7 @@ module AdventOfCode.Days
   , day2
   , day3
   , day4
+  , day5
 
   , AdventOfCodeDay (..)
   , AdventOfCodePart (..)
@@ -13,6 +14,7 @@ import AdventOfCode.Day1 (day1)
 import AdventOfCode.Day2 (day2)
 import AdventOfCode.Day3 (day3)
 import AdventOfCode.Day4 (day4)
+import AdventOfCode.Day5 (day5)
 import AdventOfCode.Types
 
 data AdventOfCodeDay
@@ -20,6 +22,7 @@ data AdventOfCodeDay
   | Day2
   | Day3
   | Day4
+  | Day5
   deriving (Read, Show, Eq, Ord, Enum, Bounded)
 
 data AdventOfCodePart
@@ -34,6 +37,7 @@ getPuzzleForDay d =
     Day2 -> day2
     Day3 -> day3
     Day4 -> day4
+    Day5 -> day5
 
 puzzleForPart :: AdventOfCodePart -> PuzzleDay IO -> Puzzle IO ()
 puzzleForPart (Part1) = puzzleDay1
