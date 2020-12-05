@@ -1,7 +1,6 @@
 {-# Language TypeApplications #-}
 {-# Language RecordWildCards #-}
 module AdventOfCode where
-import System.Environment (getArgs)
 import Options.Applicative
 import Data.Char
 
