@@ -1,11 +1,11 @@
 module AdventOfCode.Day5 where
 import           AdventOfCode.Types
 import           Control.Monad
+import           Control.Monad.ST
+import qualified Data.List          as List
 import           Data.Ord
+import           GHC.Arr
 import           Text.Printf
-import Control.Monad.ST
-import GHC.Arr
-import qualified Data.List as List
 
 binSearch :: (a -> Ordering) -> Int -> Int -> [a] -> Int
 binSearch cmp l u [] = u
@@ -72,7 +72,7 @@ part2 = withStringInput $ \i ->
     seats = seatSet $ map (uncurry seatId . findSeatPart1) (lines i)
   in
     case findEmptySeat seats of
-       Nothing -> putStrLn "no empty seat available"
+       Nothing     -> putStrLn "no empty seat available"
        Just seatId -> putStrLn $ printf "empty seat id: %d" seatId
 
 day5 :: PuzzleDay IO
