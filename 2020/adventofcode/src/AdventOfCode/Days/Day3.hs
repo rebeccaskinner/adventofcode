@@ -1,4 +1,4 @@
-module AdventOfCode.Day3
+module AdventOfCode.Days.Day3
   ( part1
   , part2
   , day3

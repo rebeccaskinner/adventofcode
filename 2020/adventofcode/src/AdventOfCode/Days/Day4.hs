@@ -1,7 +1,7 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
-module AdventOfCode.Day4 where
+module AdventOfCode.Days.Day4 where
 --  ( part1
 --  , part2
 --  , day4

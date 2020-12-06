@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module AdventOfCode.Day2
+module AdventOfCode.Days.Day2
   ( part1
   , part2
   , day2

@@ -1,9 +1,9 @@
-module AdventOfCode.Day5 (part1, part2, day5) where
+module AdventOfCode.Days.Day5 (part1, part2, day5) where
 import           AdventOfCode.Types
 import           Control.Monad
 import           Control.Monad.ST
+import           Data.Bits
 import qualified Data.List          as List
-import Data.Bits
 import           GHC.Arr
 import           Text.Printf
 
@@ -18,7 +18,7 @@ strToSeatId =
         'L' -> 0
         'B' -> 1
         'R' -> 1
-        _ -> error "invalid input"
+        _   -> error "invalid input"
 
 maxSeatId = (127 * 8 + 7)
 

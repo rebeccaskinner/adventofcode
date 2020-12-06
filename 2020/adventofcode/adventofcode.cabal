@@ -20,11 +20,32 @@ library
   exposed-modules:     AdventOfCode
                      , AdventOfCode.Types
                      , AdventOfCode.Days
-                     , AdventOfCode.Day1
-                     , AdventOfCode.Day2
-                     , AdventOfCode.Day3
-                     , AdventOfCode.Day4
-                     , AdventOfCode.Day5
+                     , AdventOfCode.Days.Day1
+                     , AdventOfCode.Days.Day2
+                     , AdventOfCode.Days.Day3
+                     , AdventOfCode.Days.Day4
+                     , AdventOfCode.Days.Day5
+                     , AdventOfCode.Days.Day6
+                     , AdventOfCode.Days.Day7
+                     , AdventOfCode.Days.Day8
+                     , AdventOfCode.Days.Day9
+                     , AdventOfCode.Days.Day10
+                     , AdventOfCode.Days.Day11
+                     , AdventOfCode.Days.Day12
+                     , AdventOfCode.Days.Day13
+                     , AdventOfCode.Days.Day14
+                     , AdventOfCode.Days.Day15
+                     , AdventOfCode.Days.Day16
+                     , AdventOfCode.Days.Day17
+                     , AdventOfCode.Days.Day18
+                     , AdventOfCode.Days.Day19
+                     , AdventOfCode.Days.Day20
+                     , AdventOfCode.Days.Day21
+                     , AdventOfCode.Days.Day22
+                     , AdventOfCode.Days.Day23
+                     , AdventOfCode.Days.Day24
+                     , AdventOfCode.Days.Day25
+
   -- other-modules:
   -- other-extensions:
   build-depends:       base ^>=4.14.1.0

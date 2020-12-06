@@ -1,6 +1,6 @@
 {-# LANGUAGE TupleSections #-}
 
-module AdventOfCode.Day1
+module AdventOfCode.Days.Day1
   ( day1
   , part1
   , part2
