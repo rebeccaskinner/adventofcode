@@ -45,6 +45,9 @@ library
                      , AdventOfCode.Days.Day23
                      , AdventOfCode.Days.Day24
                      , AdventOfCode.Days.Day25
+                     , Data.Text.Utils
+                     , Data.String.Utils
+                     , Data.ByteString.Char8.Utils
 
   -- other-modules:
   -- other-extensions:

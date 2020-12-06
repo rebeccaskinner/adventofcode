@@ -10,6 +10,7 @@ import AdventOfCode.Types
 import Text.Read
 import Data.Maybe
 import Data.Char
+import Data.Text.Utils
 import qualified Data.Text as Text
 import qualified Data.Map.Strict as Map
 
@@ -93,12 +94,6 @@ validatePassportFields m = isJust $ do
   _passportId     <- Map.lookup "pid" m
   pure ()
 
-splitAtFirst :: Text.Text -> Text.Text -> (Text.Text,Text.Text)
-splitAtFirst tok t =
-  case Text.splitOn tok t of
-    [] -> (Text.empty,Text.empty)
-    [t'] -> (t',Text.empty)
-    (t':ts) -> (t', Text.intercalate tok ts)
 
 validatePassportEntry :: Text.Text -> Bool
 validatePassportEntry =
@@ -116,8 +111,6 @@ parsePassport' =
   . concatMap (Text.words)
   . Text.lines
 
-breakAtEmptyLines :: Text.Text -> [Text.Text]
-breakAtEmptyLines = Text.splitOn "\n\n"
 
 getList c = map (map (splitAtFirst ":") .concatMap Text.words . Text.lines) $ breakAtEmptyLines c
 
