@@ -3,7 +3,9 @@ module AdventOfCode.Days.Day10 where
 import AdventOfCode.Types
 import Data.List
 import Data.Maybe
-import Debug.Trace
+import Text.Printf
+import Control.Monad.ST
+import GHC.STRef
 import qualified Data.IntMap.Strict as Map
 import qualified Data.IntSet as Set
 
@@ -42,18 +44,57 @@ stepJolts startingJoltage adapters =
                                 in d > 0 && d <= 3) adapters
   in concatMap applyAdapterAt adapterIndexes
 
-loadAdjacencyMatrix :: [Int] -> Map.Map (Set.IntSet)
-loadAdjacencyMatrix =
-  let s = fromList
+setElems :: [Int] -> Set.IntSet -> [Int]
+setElems items s =
+  filter (`Set.member` s) items
 
+loadAdjacencyMatrix :: [Int] -> Map.IntMap Set.IntSet
+loadAdjacencyMatrix items =
+  let s = Set.fromList items
+  in Set.foldl (addEdges s) Map.empty s
+  where
+    addEdges :: Set.IntSet -> Map.IntMap (Set.IntSet) -> Int -> Map.IntMap (Set.IntSet)
+    addEdges refLst m n =
+      let candidateEdges = Set.fromList [n + 1, n + 2, n + 3]
+          edges = Set.intersection refLst candidateEdges
+      in Map.insert n edges m
 
-testPart2 = pure 0
+-- calculate incoming edges rather than outgoing
+inverseAdjacencyMatrix :: [Int] -> Map.IntMap (Set.IntSet)
+inverseAdjacencyMatrix items =
+  let s = Set.fromList items
+  in Set.foldl (addEdges s) Map.empty s
+  where
+    addEdges :: Set.IntSet -> Map.IntMap (Set.IntSet) -> Int -> Map.IntMap (Set.IntSet)
+    addEdges refLst m n =
+      let candidateEdges = Set.fromList [n - 1, n - 2, n - 3]
+          edges = Set.intersection refLst candidateEdges
+      in Map.insert n edges m
+
+countPaths :: Map.IntMap Set.IntSet -> Int -> Int -> Int
+countPaths gr start end = runST $ do
+  cache <- newSTRef Map.empty
+  let
+    step start'
+      | start' == end = pure 1
+      | otherwise = do
+          cache' <- readSTRef cache
+          case Map.lookup start' cache' of
+            Just cachedValue -> pure cachedValue
+            Nothing -> do
+              case Map.lookup start' gr of
+                Nothing -> pure 0
+                Just elems -> do
+                  v <- sum <$> (mapM step (Set.toList elems))
+                  writeSTRef cache (Map.insert start' v cache')
+                  pure v
+  step start
 
 calcPath = ((0:) <$>) . stepJolts 0
 
 calcDiffs :: [Int] -> (Int,Int,Int)
 calcDiffs [] = (0,0,0)
-calcDiffs [n] = (0,0,0)
+calcDiffs [_] = (0,0,0)
 calcDiffs (x:y:rest) =
   let (a,b,c) = calcDiffs (y:rest)
   in case (y - x) of
@@ -71,9 +112,9 @@ part1 = withStringInput $ \i ->
 
 part2 :: Puzzle IO ()
 part2 = withStringInput $ \i -> do
-  let nums = contentsToList i
-      p = nextPaths 0 nums
-  putStrLn . show $ length p
+  let l = 0 : contentsToList i
+      gr = inverseAdjacencyMatrix l
+  putStrLn . show $ countPaths gr (maximum l) 0
 
 day10 :: PuzzleDay IO
 day10 = PuzzleDay part1 part2
