@@ -1,13 +1,14 @@
 {-# LANGUAGE BangPatterns #-}
 module AdventOfCode.Days.Day10 where
-import AdventOfCode.Types
-import Data.List
-import Data.Maybe
-import Text.Printf
-import Control.Monad.ST
-import GHC.STRef
+import           AdventOfCode.Types
+import           Control.Monad.ST
 import qualified Data.IntMap.Strict as Map
-import qualified Data.IntSet as Set
+import qualified Data.IntSet        as Set
+import Debug.Trace
+import           Data.List
+import           Data.Maybe
+import           GHC.STRef
+import           Text.Printf
 
 contentsToList :: String -> [Int]
 contentsToList = sort . map read . lines
@@ -90,6 +91,30 @@ countPaths gr start end = runST $ do
                   pure v
   step start
 
+countPaths' :: [Int] -> Int
+countPaths' adapters =
+  let m = maximum adapters
+      cache = (Map.singleton m 1, 0)
+      s = Set.fromList adapters
+  in snd $ foldr (f s) cache (init adapters)
+  where
+    edges :: Int -> Set.IntSet -> [Int]
+    edges idx s =
+      let
+        s' = Set.fromList [idx + 1, idx + 2, idx + 3]
+      in Set.toList $ Set.intersection s s'
+
+    fetchEdgeWeight :: Map.IntMap Int -> Int -> Int
+    fetchEdgeWeight m k = fromMaybe 0 $ Map.lookup k m
+
+    f :: Set.IntSet -> Int -> (Map.IntMap Int,Int) -> (Map.IntMap Int,Int)
+    f adj joltage (cache, _s) =
+      let
+        e = edges joltage adj
+        w = sum $ map (fetchEdgeWeight cache) e
+        cache' = Map.insert joltage w cache
+      in (cache', w)
+
 calcPath = ((0:) <$>) . stepJolts 0
 
 calcDiffs :: [Int] -> (Int,Int,Int)
@@ -112,9 +137,10 @@ part1 = withStringInput $ \i ->
 
 part2 :: Puzzle IO ()
 part2 = withStringInput $ \i -> do
-  let l = 0 : contentsToList i
+  let l = 0:(contentsToList i)
       gr = inverseAdjacencyMatrix l
   putStrLn . show $ countPaths gr (maximum l) 0
+--  putStrLn . show $ countPaths' l
 
 day10 :: PuzzleDay IO
 day10 = PuzzleDay part1 part2
