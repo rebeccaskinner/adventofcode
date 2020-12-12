@@ -8,12 +8,14 @@ import GHC.Arr
 import Control.Monad
 import Data.Foldable
 import Data.Function
+import Data.Bifunctor
+import Data.Maybe
 import qualified Data.Map.Strict as Map
 
 data Tile = Floor | OpenSeat | OccupiedSeat deriving (Eq, Show)
 data Board = Board { boardRows  :: !Int
                    , boardCols  :: !Int
-                   , boardData  :: !(Array Int Tile) -- ![Tile]
+                   , boardData  :: !(Array Int Tile)
                    , boardCache :: Map.Map Int [Int]
                    } deriving (Eq, Show)
 
@@ -51,8 +53,8 @@ showTileChar t =
     OccupiedSeat -> '#'
     OpenSeat -> 'L'
 
-parseBoard :: String -> Board
-parseBoard contents =
+parseBoard :: (Int -> Board -> [Int]) -> String -> Board
+parseBoard findNeighbors contents =
   let
     contents' = lines contents
     (Just tiles) = mapM (mapM parseTile) contents'
@@ -64,7 +66,7 @@ parseBoard contents =
      , boardCols = cols
      , boardData = listArray (0,l) (concat tiles)
      , boardCache = Map.empty
-     } & updateBoardCache
+     } & (updateBoardCache findNeighbors)
 
 showBoard :: Board -> String
 showBoard (Board _rows cols tiles _cache) =
@@ -78,18 +80,17 @@ tileToNum t = if (t == OccupiedSeat) then 1 else 0
 toIdx :: Num a => a -> a -> a -> a
 toIdx stride row col = (row * stride) + col
 
-updateBoardCache :: Board -> Board
-updateBoardCache b =
+updateBoardCache :: (Int -> Board -> [Int]) -> Board -> Board
+updateBoardCache findNeighbors b =
   let l = pred $ (boardRows b) * (boardCols b)
-      cache = foldl' (updateNeighborCache b) (boardCache b) [0..l]
+      cache = foldl' (updateNeighborCache findNeighbors b) (boardCache b) [0..l]
   in b { boardCache = cache }
   where
-    updateNeighborCache :: Board -> Map.Map Int [Int] -> Int -> Map.Map Int [Int]
-    updateNeighborCache b cache idx =
-      Map.insert idx (neighbors idx b) cache
+    updateNeighborCache f b cache idx =
+      Map.insert idx (f idx b) cache
 
-    neighbors :: Int -> Board -> [Int]
-    neighbors idx Board{..} =
+adjacentNeighbors :: Int -> Board -> [Int]
+adjacentNeighbors idx Board{..} =
       let
         (row, col) = idx `divMod` boardCols
       in [ (toIdx boardCols r c)
@@ -99,6 +100,36 @@ updateBoardCache b =
          , r >= 0 && r < boardRows
          , c >= 0 && c < boardCols
          ]
+
+raycastNeighbors :: Int -> Board -> [Int]
+raycastNeighbors idx Board{..} =
+  let
+    c = idx `divMod` boardCols
+    inBounds (y,x) = (y >= 0) && (y < boardRows) && (x >= 0) && (x < boardCols)
+    toIdx' = uncurry $ toIdx boardCols
+    castRay f coord =
+      let coord' = f coord
+          idx' = toIdx' coord'
+      in
+        if inBounds coord'
+        then case boardData ! idx' of
+               Floor -> castRay f coord'
+               _ -> Just idx'
+        else Nothing
+
+    rays :: [(Int,Int) -> Maybe Int]
+    rays =
+      castRay <$>
+      [ first pred . second pred
+      , first pred
+      , first pred . second succ
+      , second pred
+      , second succ
+      , first succ . second pred
+      , first succ
+      , first succ . second succ
+      ]
+  in catMaybes $ map ($c) rays
 
 neighbors :: Int -> Board -> [Tile]
 neighbors idx b =
@@ -118,11 +149,12 @@ stepTile b m idx  =
           Just items -> Just (c:items)
   in foldl' (\m' idx -> Map.alter addTileToNeighbor idx m') m n
 
-stepBoard :: Board -> Board
-stepBoard b =
+stepBoard :: Int -> Board -> Board
+stepBoard maxSeatDensity b =
   let
     l = pred $ (boardRows b) * (boardCols b)
-    neighborMap = foldl' (stepTile b) Map.empty [0..l]
+    emptyNeighborMap = Map.fromList $ zip [0..l] (repeat [])
+    neighborMap = foldl' (stepTile b) emptyNeighborMap [0..l]
     tiles = amap (updateTile b) (listArray (0,l) $ Map.toList neighborMap)
   in b { boardData = tiles }
   where
@@ -134,21 +166,22 @@ stepBoard b =
            OpenSeat ->
              if cnt == 0 then OccupiedSeat else OpenSeat
            OccupiedSeat ->
-             if cnt >= 4 then OpenSeat else OccupiedSeat
+             if cnt >= maxSeatDensity then OpenSeat else OccupiedSeat
 
-fixBoard :: Board -> Board
-fixBoard = fix $ \rec b ->
-  let b' = stepBoard b
+fixBoard :: Int -> Board -> Board
+fixBoard d = fix $ \rec b ->
+  let b' = stepBoard d b
   in if b == b' then b else rec b'
 
 part1 :: Puzzle IO ()
 part1 = withStringInput $ \i -> do
-  let b = fixBoard $ parseBoard i
+  let b = fixBoard 4 $ parseBoard adjacentNeighbors i
   putStrLn . show . boardStats $ b
 
 part2 :: Puzzle IO ()
 part2 = withStringInput $ \i -> do
-  putStrLn "Day 6 - Part 2"
+  let b = fixBoard 5 $ parseBoard raycastNeighbors i
+  putStrLn . show . boardStats $ b
 
 day11 :: PuzzleDay IO
 day11 = PuzzleDay part1 part2

@@ -50,7 +50,7 @@ library
                      , Data.String.Utils
                      , Data.ByteString.Char8.Utils
 
-  ghc-options: -fprof-auto
+  ghc-options: -fprof-auto -threaded
   -- other-modules:
   -- other-extensions:
   build-depends:       base
