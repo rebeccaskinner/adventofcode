@@ -19,6 +19,7 @@ extra-source-files:  CHANGELOG.md
 library
   exposed-modules:     AdventOfCode
                      , AdventOfCode.Types
+                     , AdventOfCode.List.Utils
                      , AdventOfCode.Days
                      , AdventOfCode.Days.Day1
                      , AdventOfCode.Days.Day2
@@ -49,6 +50,7 @@ library
                      , Data.String.Utils
                      , Data.ByteString.Char8.Utils
 
+  ghc-options: -fprof-auto
   -- other-modules:
   -- other-extensions:
   build-depends:       base
