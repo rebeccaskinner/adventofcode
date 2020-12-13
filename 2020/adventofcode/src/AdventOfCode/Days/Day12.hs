@@ -1,8 +1,8 @@
 {-# LANGUAGE RecordWildCards #-}
 module AdventOfCode.Days.Day12 (part1,part2,day12) where
 import           AdventOfCode.Types
-import Data.List
-import GHC.Arr
+import           Data.List
+import           GHC.Arr
 
 data Heading
   = North
@@ -41,11 +41,11 @@ parseMovement movement =
        "E" -> MoveEast amnt'
        "W" -> MoveWest amnt'
 
-data Ship = Ship { shipX        :: !Int
-                 , shipY        :: !Int
-                 , shipHeading  :: !Heading
-                 , waypointX    :: !Int
-                 , waypointY    :: !Int
+data Ship = Ship { shipX       :: !Int
+                 , shipY       :: !Int
+                 , shipHeading :: !Heading
+                 , waypointX   :: !Int
+                 , waypointY   :: !Int
                  } deriving (Eq, Show)
 
 taxicabShip :: Ship -> Int
